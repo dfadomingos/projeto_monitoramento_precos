@@ -24,17 +24,31 @@ lista_produtos = [
 
 def buscar_menor_preco(nome_produto):
     url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}"
-    scraper = cloudscraper.create_scraper()
+    
+    #criando um "disfarce" de navegador real
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://www.google.com/'
+    }
+
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
     
     try:
-        response = scraper.get(url, timeout=15)
+        #passando os headers para a requisição
+        response = scraper.get(url, headers=headers, timeout=20)
+        
+        #se o Mercado Livre bloquear, o status_code não será 200
+        if response.status_code != 200:
+            print(f"DEBUG: [{nome_produto}] Erro {response.status_code} ao acessar a página.")
+            return None
+
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # --- DEBUG: Verificando se a página foi carregada ---
-        resultados = soup.select('.ui-search-result__wrapper') or \
-                     soup.select('.poly-card') or \
-                     soup.select('.ui-search-item__group') or \
-                     soup.select('.ui-search-result')
+        #seletores ultra-genéricos para tentar capturar qualquer coisa que pareça um produto
+        resultados = soup.select('[class*="ui-search-result"]') or \
+                     soup.select('[class*="poly-card"]') or \
+                     soup.select('li.ui-search-layout__item')
         
         print(f"DEBUG: [{nome_produto}] Encontrei {len(resultados)} blocos de produtos.")
 
@@ -42,50 +56,33 @@ def buscar_menor_preco(nome_produto):
         termos_busca = [p.lower().replace(" ", "") for p in nome_produto.split()]
 
         for item in resultados:
-            # Filtro de anúncios (patrocinados)
             if item.select_one('.ui-search-item__ad-label') or item.select_one('.poly-component__ad'):
                 continue
 
-            # Tenta múltiplos seletores para o título e preço
-            titulo_tag = item.select_one('.poly-component__title') or \
-                         item.select_one('.ui-search-item__title') or \
-                         item.select_one('.ui-search-item__group h2') or \
-                         item.find('h2')
-            
+            titulo_tag = item.select_one('h2') or item.select_one('.ui-search-item__title')
             price_tag = item.select_one('.andes-money-amount__fraction')
 
             if titulo_tag and price_tag:
                 titulo_original = titulo_tag.text.strip().lower()
                 titulo_comparacao = titulo_original.replace(" ", "").replace("-", "")
                 
-                # Validação de nome
                 if not all(p in titulo_comparacao for p in termos_busca):
                     continue
 
-                # Extração de preço com limpeza profunda
-                # Removemos pontos de milhar para não confundir o float
                 valor_texto = price_tag.text.replace('.', '').replace(',', '')
                 cents_tag = item.select_one('.andes-money-amount__cents')
                 centavos = cents_tag.text if cents_tag else "00"
                 
                 try:
                     preco_final = float(f"{valor_texto}.{centavos}")
-                except ValueError:
-                    continue
-
-                # Filtro de acessórios (evita lixo no banco)
-                if any(acc in titulo_original for acc in ['capa', 'case', 'pelicula', 'carregador']):
+                except:
                     continue
 
                 candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
 
-        if candidatos:
-            vencedor = min(candidatos, key=lambda x: x['preco'])
-            return vencedor
-            
-        return None
+        return min(candidatos, key=lambda x: x['preco']) if candidatos else None
     except Exception as e:
-        print(f"❌ Erro ao processar {nome_produto}: {e}")
+        print(f"❌ Erro em {nome_produto}: {e}")
         return None
 
 def iniciar_monitoramento():
