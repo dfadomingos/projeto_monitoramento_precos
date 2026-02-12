@@ -22,35 +22,41 @@ lista_produtos = [
     "Samsung a36 256gb"
 ]
 
-def buscar_menor_preco(nome_produto):
-    url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}"
+import random
+
+def buscar_menor_preco(nome_produto, scraper):
+    #mudando o formato da url para tentar evitar bloqueios
+    url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}_NoIndex_True"
     
-    #criando um "disfarce" de navegador real
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': 'https://www.google.com/'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+        'Cache-Control': 'max-age=0',
+        'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
     }
 
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-    
     try:
-        #passando os headers para a requisição
+        #usando o scraper para fazer a requisição, que já lida com Cloudflare e outros bloqueios
         response = scraper.get(url, headers=headers, timeout=20)
-        
-        #se o Mercado Livre bloquear, o status_code não será 200
-        if response.status_code != 200:
-            print(f"DEBUG: [{nome_produto}] Erro {response.status_code} ao acessar a página.")
-            return None
-
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        #seletores ultra-genéricos para tentar capturar qualquer coisa que pareça um produto
-        resultados = soup.select('[class*="ui-search-result"]') or \
-                     soup.select('[class*="poly-card"]') or \
-                     soup.select('li.ui-search-layout__item')
+        #pegando o título da página para ajudar a identificar bloqueios ou redirecionamentos
+        titulo_pagina = soup.title.text if soup.title else "Sem Título"
         
-        print(f"DEBUG: [{nome_produto}] Encontrei {len(resultados)} blocos de produtos.")
+        #seletores mais genéricos para tentar pegar os resultados mesmo que a estrutura mude um pouco
+        resultados = soup.select('.ui-search-result__wrapper') or \
+                     soup.select('.poly-card') or \
+                     soup.select('ol.ui-search-layout li') or \
+                     soup.find_all('div', {'class': 'ui-search-result__content'})
+        
+        print(f"DEBUG: [{nome_produto}] Status: {response.status_code} | Título: {titulo_pagina} | Blocos: {len(resultados)}")
+
+        #se não encontrar nada, vamos ver um pedaço do código para entender o bloqueio
+        if len(resultados) == 0:
+            print(f"DEBUG: Conteúdo parcial da página: {response.text[:200].strip()}")
 
         candidatos = []
         termos_busca = [p.lower().replace(" ", "") for p in nome_produto.split()]
@@ -59,6 +65,7 @@ def buscar_menor_preco(nome_produto):
             if item.select_one('.ui-search-item__ad-label') or item.select_one('.poly-component__ad'):
                 continue
 
+            #tentativa robusta de pegar título e preço
             titulo_tag = item.select_one('h2') or item.select_one('.ui-search-item__title')
             price_tag = item.select_one('.andes-money-amount__fraction')
 
@@ -75,10 +82,9 @@ def buscar_menor_preco(nome_produto):
                 
                 try:
                     preco_final = float(f"{valor_texto}.{centavos}")
+                    candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
                 except:
                     continue
-
-                candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
 
         return min(candidatos, key=lambda x: x['preco']) if candidatos else None
     except Exception as e:
@@ -90,34 +96,35 @@ def iniciar_monitoramento():
         print("❌ Erro: Variável DB_URL não encontrada.")
         return
     
-    #conexão com o banco de dados
-    try:
-        conn = psycopg2.connect(DB_URL)
-        cur = conn.cursor()
+    #criando o scraper apenas uma vez para manter a sessão (cookies)
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False},
+        delay=10
+    )
+    
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
 
-        for produto in lista_produtos:
-            #buscando o menor preço para cada produto da lista e salvando no banco de dados
-            print(f"🔍 Buscando: {produto}")
-            resultado = buscar_menor_preco(produto)
-            
-            if resultado:
-                cur.execute(
-                    "INSERT INTO historico_precos (produto_buscado, nome_produto_ml, preco) VALUES (%s, %s, %s)",
-                    (produto, resultado['titulo'], resultado['preco'])
-                )
-                print(f"✅ Salvo: {resultado['titulo'][:40]}... - R$ {resultado['preco']}")
-            else:
-                print(f"⚠️ Não foi possível encontrar um preço válido para {produto}")
+    for produto in lista_produtos:
+        print(f"🔍 Buscando: {produto}")
+        resultado = buscar_menor_preco(produto, scraper)
+        
+        if resultado:
+            cur.execute(
+                "INSERT INTO historico_precos (produto_buscado, nome_produto_ml, preco) VALUES (%s, %s, %s)",
+                (produto, resultado['titulo'], resultado['preco'])
+            )
+            print(f"✅ Salvo: {resultado['titulo'][:30]} - R$ {resultado['preco']}")
+        
+        #espera aleatória entre 8 e 15 segundos para evitar bloqueios por requisições rápidas
+        tempo_espera = random.randint(8, 15)
+        print(f"⏳ Aguardando {tempo_espera}s para a próxima busca...")
+        time.sleep(tempo_espera)
 
-            #pausa de 5 segundos entre as buscas para evitar bloqueios por excesso de requisições
-            time.sleep(5)
-
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("Monitoramento diário concluído com sucesso!")
-    except Exception as e:
-        print(f"❌ Erro na conexão com o banco: {e}")
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Monitoramento diário concluído com sucesso!")
 
 if __name__ == "__main__":
     iniciar_monitoramento()
