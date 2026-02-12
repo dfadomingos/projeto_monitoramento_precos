@@ -1,0 +1,28 @@
+name: Monitor de Preços Diário
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Roda todo dia às 6h da manhã (UTC) (3h no horário de Brasília)
+  workflow_dispatch: # Permite rodar manualmente o workflow
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          pip install cloudscraper beautifulsoup4 psycopg2-binary pandas
+
+      - name: Rodar o Bot de Monitoramento
+        env:
+          DB_URL: ${{ secrets.DB_URL }} 
+        run: python bot.py
