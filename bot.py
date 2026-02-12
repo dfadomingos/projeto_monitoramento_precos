@@ -23,62 +23,69 @@ lista_produtos = [
 ]
 
 def buscar_menor_preco(nome_produto):
-    #realiza o scraping no Mercado Livre, filtrando anúncios patrocinados
-    # e retornando o menor preço encontrado para o produto específico.
-    
     url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}"
-
-    #cloudscraper é utilizado para contornar proteções anti-bot (cloudflare)
     scraper = cloudscraper.create_scraper()
+    
     try:
         response = scraper.get(url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
-        #seletores que abrangem diferentes layouts da página do Mercado Livre
-        resultados = soup.select('.ui-search-result__wrapper') or soup.select('.poly-card') or \
-                soup.select('.ui-search-item__group')
         
+        # --- DEBUG: Verificando se a página foi carregada ---
+        resultados = soup.select('.ui-search-result__wrapper') or \
+                     soup.select('.poly-card') or \
+                     soup.select('.ui-search-item__group') or \
+                     soup.select('.ui-search-result')
+        
+        print(f"DEBUG: [{nome_produto}] Encontrei {len(resultados)} blocos de produtos.")
+
         candidatos = []
+        termos_busca = [p.lower().replace(" ", "") for p in nome_produto.split()]
+
         for item in resultados:
-            #ignorando anúncios patrocinados, evitando distorção nos preços
+            # Filtro de anúncios (patrocinados)
             if item.select_one('.ui-search-item__ad-label') or item.select_one('.poly-component__ad'):
                 continue
 
-            titulo_tag = item.select_one('.poly-component__title') or item.select_one('.ui-search-item__title') or item.find('h2')
+            # Tenta múltiplos seletores para o título e preço
+            titulo_tag = item.select_one('.poly-component__title') or \
+                         item.select_one('.ui-search-item__title') or \
+                         item.select_one('.ui-search-item__group h2') or \
+                         item.find('h2')
+            
             price_tag = item.select_one('.andes-money-amount__fraction')
 
             if titulo_tag and price_tag:
-                titulo = titulo_tag.text.strip().lower()
+                titulo_original = titulo_tag.text.strip().lower()
+                titulo_comparacao = titulo_original.replace(" ", "").replace("-", "")
                 
-                #Removendo espaços para comparar "256gb" com "256 gb" corretamente
-                titulo_normalizado = titulo.replace(" ", "")
-                termos_busca = [p.lower().replace(" ", "") for p in nome_produto.split()]
-                
-                #validando se o título contém todas as palavras do nome do produto, garantindo relevância
-                if not all(p in titulo_normalizado for p in termos_busca):
-                    continue
-                
-                #filtro de acessórios 
-                acessorios = ['capa', 'case', 'pelicula', 'suporte', 'carregador']
-                if any(acc in titulo for acc in acessorios) and 'capa' not in nome_produto.lower():
+                # Validação de nome
+                if not all(p in titulo_comparacao for p in termos_busca):
                     continue
 
-                #removendo formatação de preço e convertendo para float, considerando centavos
-                valor = price_tag.text.replace('.', '').replace(',', '')
+                # Extração de preço com limpeza profunda
+                # Removemos pontos de milhar para não confundir o float
+                valor_texto = price_tag.text.replace('.', '').replace(',', '')
                 cents_tag = item.select_one('.andes-money-amount__cents')
                 centavos = cents_tag.text if cents_tag else "00"
-                preco_final = float(f"{valor}.{centavos}")
-
-                #trava de segurança de preço
-                #evita que peças ou golpes entrem na média (Ex: iPhone por R$ 100)
-                if ("iphone" in titulo or "samsung" in titulo) and preco_final < 400:
+                
+                try:
+                    preco_final = float(f"{valor_texto}.{centavos}")
+                except ValueError:
                     continue
 
-                candidatos.append({"titulo": titulo.title(), "preco": preco_final})
+                # Filtro de acessórios (evita lixo no banco)
+                if any(acc in titulo_original for acc in ['capa', 'case', 'pelicula', 'carregador']):
+                    continue
 
-        #retorna o anúncio com o menor preço encontrado, ou None se nenhum válido for encontrado
-        return min(candidatos, key=lambda x: x['preco']) if candidatos else None
+                candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
+
+        if candidatos:
+            vencedor = min(candidatos, key=lambda x: x['preco'])
+            return vencedor
+            
+        return None
     except Exception as e:
-        print(f"Erro técnico ao processar {nome_produto}: {e}")
+        print(f"❌ Erro ao processar {nome_produto}: {e}")
         return None
 
 def iniciar_monitoramento():
