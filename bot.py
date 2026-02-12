@@ -4,6 +4,7 @@ import psycopg2
 import os
 import time
 from datetime import datetime
+import random
 
 DB_URL = os.getenv("DB_URL")
 
@@ -22,57 +23,51 @@ lista_produtos = [
     "Samsung a36 256gb"
 ]
 
-import random
-
 def buscar_menor_preco(nome_produto, scraper):
-    #mudando o formato da url para tentar evitar bloqueios
-    url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}_NoIndex_True"
+    #mudando para a URL mobile, que é mais leve e menos protegida por JS
+    #adicionando filtros de 'apenas novos' e 'menor preço' direto na URL
+    url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}_ItemTypeID_N_OrderId_price_asc"
     
+    #definindo um user-agent mais simples, simulando um navegador mobile, para evitar bloqueios
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'pt-BR,pt;q=0.9',
-        'Cache-Control': 'max-age=0',
-        'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Connection': 'keep-alive',
     }
 
     try:
-        #usando o scraper para fazer a requisição, que já lida com Cloudflare e outros bloqueios
         response = scraper.get(url, headers=headers, timeout=20)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        #pegando o título da página para ajudar a identificar bloqueios ou redirecionamentos
-        titulo_pagina = soup.title.text if soup.title else "Sem Título"
+        #se o título continuar vazio, tenta pegar de um meta tag ou h1
+        titulo_detectado = soup.find('title').text.strip() if soup.find('title') else "Sem Título"
         
-        #seletores mais genéricos para tentar pegar os resultados mesmo que a estrutura mude um pouco
+        #seletores de classe simplificados
         resultados = soup.select('.ui-search-result__wrapper') or \
                      soup.select('.poly-card') or \
-                     soup.select('ol.ui-search-layout li') or \
-                     soup.find_all('div', {'class': 'ui-search-result__content'})
+                     soup.select('.ui-search-item') or \
+                     soup.find_all('div', class_=lambda x: x and 'result' in x)
         
-        print(f"DEBUG: [{nome_produto}] Status: {response.status_code} | Título: {titulo_pagina} | Blocos: {len(resultados)}")
-
-        #se não encontrar nada, vamos ver um pedaço do código para entender o bloqueio
-        if len(resultados) == 0:
-            print(f"DEBUG: Conteúdo parcial da página: {response.text[:200].strip()}")
+        print(f"DEBUG: [{nome_produto}] Título: {titulo_detectado} | Itens: {len(resultados)}")
 
         candidatos = []
         termos_busca = [p.lower().replace(" ", "") for p in nome_produto.split()]
 
         for item in resultados:
-            if item.select_one('.ui-search-item__ad-label') or item.select_one('.poly-component__ad'):
+            #ignora patrocinados
+            if "patrocinado" in item.text.lower() or item.select_one('.ui-search-item__ad-label'):
                 continue
 
-            #tentativa robusta de pegar título e preço
-            titulo_tag = item.select_one('h2') or item.select_one('.ui-search-item__title')
+            #busca título e preço usando seletores mais genéricos
+            titulo_tag = item.find('h2') or item.select_one('.ui-search-item__title')
             price_tag = item.select_one('.andes-money-amount__fraction')
 
             if titulo_tag and price_tag:
                 titulo_original = titulo_tag.text.strip().lower()
                 titulo_comparacao = titulo_original.replace(" ", "").replace("-", "")
                 
+                #validação de termos
                 if not all(p in titulo_comparacao for p in termos_busca):
                     continue
 
@@ -82,13 +77,15 @@ def buscar_menor_preco(nome_produto, scraper):
                 
                 try:
                     preco_final = float(f"{valor_texto}.{centavos}")
-                    candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
+                    #filtro de preço para evitar acessórios
+                    if preco_final > 100: 
+                        candidatos.append({"titulo": titulo_original.title(), "preco": preco_final})
                 except:
                     continue
 
         return min(candidatos, key=lambda x: x['preco']) if candidatos else None
     except Exception as e:
-        print(f"❌ Erro em {nome_produto}: {e}")
+        print(f"❌ Erro: {e}")
         return None
 
 def iniciar_monitoramento():
