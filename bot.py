@@ -25,7 +25,7 @@ def buscar_menor_preco_api(nome_produto):
     #realiza a busca diretamente na API pública do Mercado Livre.
     
     #MLB = Brasil | condition=new garante que buscaremos apenas itens novos
-    url = f"https://api.mercadolivre.com/sites/MLB/search?q={nome_produto.replace(' ', '%20')}&condition=new"
+    url = f"https://api.mercadolibre.com/sites/MLB/search?q={nome_produto.replace(' ', '%20')}&condition=new"
     
     try:
         response = requests.get(url, timeout=20)
