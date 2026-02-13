@@ -1,5 +1,4 @@
-cloudscraper
-beautifulsoup4
+requests
 psycopg2-binary
 pandas
 streamlit
