@@ -20,7 +20,7 @@ jobs:
 
       - name: Instalar dependências
         run: |
-          pip install requests psycopg2-binary pandas
+          pip install requests psycopg2-binary pandas cloudscraper
 
       - name: Rodar o Bot de Monitoramento
         env:

@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 import psycopg2
 import os
 import time
@@ -6,7 +6,6 @@ from datetime import datetime
 
 DB_URL = os.getenv("DB_URL")
 
-#lista de produtos a serem monitorados
 lista_produtos = [
     "iPhone 15",
     "Samsung Galaxy S24",
@@ -22,22 +21,21 @@ lista_produtos = [
 ]
 
 def buscar_menor_preco_api(nome_produto):
+    #url da API do Mercado Livre com o nome do produto
     url = f"https://api.mercadolibre.com/sites/MLB/search?q={nome_produto.replace(' ', '%20')}&condition=new"
     
-    #definindo headers para simular um navegador e evitar bloqueios da API
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    }
+    #criando o scraper para contornar o bloqueio 403 da Cloudflare
+    scraper = cloudscraper.create_scraper()
     
     try:
-        #fazendo a requisição para a API do Mercado Livre
-        response = requests.get(url, headers=headers, timeout=20)
+        #usando o scraper para fazer a requisição GET à API
+        response = scraper.get(url, timeout=20)
         
         if response.status_code != 200:
-            print(f"⚠️ Erro API ({response.status_code})")
+            print(f"⚠️ Bloqueio ou Erro API ({response.status_code})")
             return None
 
+        #cloudscraper retorna um objeto compatível, então .json() funciona igual
         data = response.json()
         resultados = data.get('results', [])
 
@@ -48,6 +46,7 @@ def buscar_menor_preco_api(nome_produto):
             titulo = item.get('title', '').lower()
             preco = item.get('price')
             
+            #validação de segurança
             if not all(termo in titulo for termo in termos_busca):
                 continue
 
@@ -68,19 +67,17 @@ def buscar_menor_preco_api(nome_produto):
 
 def iniciar_monitoramento():
     if not DB_URL:
-        print("❌ Erro: Variável DB_URL não encontrada.")
+        print("❌ Erro: DB_URL não encontrada.")
         return
     
-    #conexão com o banco de dados
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
 
-        print(f"🚀 Iniciando monitoramento via API: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        print(f"🚀 Monitoramento API + Bypass: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
         for produto in lista_produtos:
-            #buscando o menor preço para cada produto da lista e salvando no banco de dados
-            print(f"🔍 Analisando: {produto}")
+            print(f"🔍 Buscando: {produto}")
             resultado = buscar_menor_preco_api(produto)
             
             if resultado:
@@ -88,19 +85,19 @@ def iniciar_monitoramento():
                     "INSERT INTO historico_precos (produto_buscado, nome_produto_ml, preco) VALUES (%s, %s, %s)",
                     (produto, resultado['titulo'], resultado['preco'])
                 )
-                print(f"✅ Sucesso: R$ {resultado['preco']} | {resultado['titulo'][:40]}...")
+                print(f"✅ R$ {resultado['preco']} | {resultado['titulo'][:30]}...")
             else:
-                print(f"⚠️ Nenhum resultado válido encontrado para: {produto}")
-
-            time.sleep(1)
+                print(f"⚠️ Sem resultados válidos.")
+            
+            time.sleep(2) 
 
         conn.commit()
         cur.close()
         conn.close()
-        print("\n✨ Monitoramento concluído e dados salvos no Neon!")
+        print("\n✨ Processo Finalizado!")
         
     except Exception as e:
-        print(f"❌ Erro na conexão ou banco: {e}")
+        print(f"❌ Erro Geral: {e}")
 
 if __name__ == "__main__":
     iniciar_monitoramento()
