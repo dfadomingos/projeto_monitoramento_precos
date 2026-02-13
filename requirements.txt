@@ -1,6 +1,0 @@
-requests
-psycopg2-binary
-pandas
-streamlit
-cloudscraper
-beautifulsoup4
