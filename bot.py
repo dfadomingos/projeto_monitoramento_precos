@@ -22,46 +22,48 @@ lista_produtos = [
 ]
 
 def buscar_menor_preco_api(nome_produto):
-    #realiza a busca diretamente na API pública do Mercado Livre.
-    
-    #MLB = Brasil | condition=new garante que buscaremos apenas itens novos
     url = f"https://api.mercadolibre.com/sites/MLB/search?q={nome_produto.replace(' ', '%20')}&condition=new"
     
+    #definindo headers para simular um navegador e evitar bloqueios da API
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
     try:
-        response = requests.get(url, timeout=20)
+        #fazendo a requisição para a API do Mercado Livre
+        response = requests.get(url, headers=headers, timeout=20)
+        
         if response.status_code != 200:
-            print(f"⚠️ Erro na API ({response.status_code}) para: {nome_produto}")
+            print(f"⚠️ Erro API ({response.status_code})")
             return None
 
         data = response.json()
         resultados = data.get('results', [])
-        
+
         candidatos = []
-        #criando termos de busca para validar se o título do anúncio é relevante
         termos_busca = nome_produto.lower().split()
 
         for item in resultados:
             titulo = item.get('title', '').lower()
             preco = item.get('price')
-
-            #validando se o título contém todas as palavras do nome do produto, garantindo relevância
+            
             if not all(termo in titulo for termo in termos_busca):
                 continue
 
-            #filtro básico para evitar acessórios (capas, cabos) que aparecem na busca
             if preco and preco > 100:
                 candidatos.append({
                     "titulo": item.get('title'),
                     "preco": float(preco)
                 })
 
-        #retorna o anúncio com o menor preço encontrado, ou None se nenhum válido for encontrado
         if candidatos:
             return min(candidatos, key=lambda x: x['preco'])
         
         return None
+
     except Exception as e:
-        print(f"❌ Erro técnico ao processar {nome_produto}: {e}")
+        print(f"❌ Erro técnico: {e}")
         return None
 
 def iniciar_monitoramento():
