@@ -1,4 +1,4 @@
-import cloudscraper
+import cloudscraper  # Biblioteca que substitui o requests
 import psycopg2
 import os
 import time
@@ -32,10 +32,9 @@ def buscar_menor_preco_api(nome_produto):
         response = scraper.get(url, timeout=20)
         
         if response.status_code != 200:
-            print(f"⚠️ Bloqueio ou Erro API ({response.status_code})")
+            print(f"⚠️ Erro API ({response.status_code})")
             return None
 
-        #cloudscraper retorna um objeto compatível, então .json() funciona igual
         data = response.json()
         resultados = data.get('results', [])
 
@@ -46,10 +45,11 @@ def buscar_menor_preco_api(nome_produto):
             titulo = item.get('title', '').lower()
             preco = item.get('price')
             
-            #validação de segurança
+            #validação: título deve conter as palavras chave
             if not all(termo in titulo for termo in termos_busca):
                 continue
 
+            #filtro para ignorar acessórios baratos
             if preco and preco > 100:
                 candidatos.append({
                     "titulo": item.get('title'),
@@ -67,14 +67,14 @@ def buscar_menor_preco_api(nome_produto):
 
 def iniciar_monitoramento():
     if not DB_URL:
-        print("❌ Erro: DB_URL não encontrada.")
+        print("❌ Erro: Variável DB_URL não configurada.")
         return
     
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
 
-        print(f"🚀 Monitoramento API + Bypass: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        print(f"🚀 Iniciando via API (Cloudscraper): {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
         for produto in lista_produtos:
             print(f"🔍 Buscando: {produto}")
@@ -94,7 +94,7 @@ def iniciar_monitoramento():
         conn.commit()
         cur.close()
         conn.close()
-        print("\n✨ Processo Finalizado!")
+        print("\n✨ Monitoramento Finalizado!")
         
     except Exception as e:
         print(f"❌ Erro Geral: {e}")
