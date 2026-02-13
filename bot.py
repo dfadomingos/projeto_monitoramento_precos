@@ -1,8 +1,9 @@
-import cloudscraper  # Biblioteca que substitui o requests
+import cloudscraper  
 import psycopg2
 import os
 import time
 from datetime import datetime
+from bs4 import BeautifulSoup
 
 DB_URL = os.getenv("DB_URL")
 
@@ -20,41 +21,67 @@ lista_produtos = [
     "Samsung a36 256gb"
 ]
 
-def buscar_menor_preco_api(nome_produto):
+def buscar_menor_preco(nome_produto):
     #url da API do Mercado Livre com o nome do produto
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={nome_produto.replace(' ', '%20')}&condition=new"
+    url = f"https://lista.mercadolivre.com.br/{nome_produto.replace(' ', '-')}_Condicion_Nuevo_NoIndex_True"
     
-    #criando o scraper para contornar o bloqueio 403 da Cloudflare
-    scraper = cloudscraper.create_scraper()
+    #configura o scraper para agir como um Chrome no Desktop
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
     
     try:
-        #usando o scraper para fazer a requisição GET à API
-        response = scraper.get(url, timeout=20)
+        response = scraper.get(url)
         
-        if response.status_code != 200:
-            print(f"⚠️ Erro API ({response.status_code})")
-            return None
-
-        data = response.json()
-        resultados = data.get('results', [])
+        #se cair no desafio do Cloudflare, o scraper resolve sozinho.
+        #se passar direto, processamos o HTML.
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        #seletores genéricos que funcionam em Desktop e Mobile
+        resultados = soup.select('.ui-search-result__wrapper') or \
+                     soup.select('.poly-card') or \
+                     soup.select('.ui-search-layout__item')
 
         candidatos = []
         termos_busca = nome_produto.lower().split()
 
         for item in resultados:
-            titulo = item.get('title', '').lower()
-            preco = item.get('price')
-            
-            #validação: título deve conter as palavras chave
-            if not all(termo in titulo for termo in termos_busca):
+            #ignora patrocinados
+            if item.select_one('.ui-search-item__ad-label') or item.select_one('.poly-component__ad'):
                 continue
 
-            #filtro para ignorar acessórios baratos
-            if preco and preco > 100:
-                candidatos.append({
-                    "titulo": item.get('title'),
-                    "preco": float(preco)
-                })
+            #busca Título
+            titulo_tag = item.select_one('.poly-component__title') or \
+                         item.select_one('.ui-search-item__title') or \
+                         item.find('h2')
+            
+            #busca Preço
+            price_tag = item.select_one('.andes-money-amount__fraction')
+
+            if titulo_tag and price_tag:
+                titulo = titulo_tag.text.strip().lower()
+                
+                #validação de nome (segurança)
+                if not all(termo in titulo for termo in termos_busca):
+                    continue
+
+                #limpeza do preço
+                valor_texto = price_tag.text.replace('.', '').replace(',', '')
+                try:
+                    preco_final = float(valor_texto)
+                except:
+                    continue
+                
+                #filtro de preço mínimo (evita acessórios)
+                if preco_final > 100:
+                    candidatos.append({
+                        "titulo": titulo.title(),
+                        "preco": preco_final
+                    })
 
         if candidatos:
             return min(candidatos, key=lambda x: x['preco'])
@@ -67,18 +94,18 @@ def buscar_menor_preco_api(nome_produto):
 
 def iniciar_monitoramento():
     if not DB_URL:
-        print("❌ Erro: Variável DB_URL não configurada.")
+        print("❌ Erro: DB_URL não configurada.")
         return
     
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
 
-        print(f"🚀 Iniciando via API (Cloudscraper): {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        print(f"🚀 Monitoramento (Web Scraping Seguro): {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
         for produto in lista_produtos:
             print(f"🔍 Buscando: {produto}")
-            resultado = buscar_menor_preco_api(produto)
+            resultado = buscar_menor_preco(produto)
             
             if resultado:
                 cur.execute(
@@ -87,14 +114,14 @@ def iniciar_monitoramento():
                 )
                 print(f"✅ R$ {resultado['preco']} | {resultado['titulo'][:30]}...")
             else:
-                print(f"⚠️ Sem resultados válidos.")
+                print(f"⚠️ Não encontrado (possível bloqueio ou sem estoque).")
             
-            time.sleep(2) 
+            time.sleep(3) 
 
         conn.commit()
         cur.close()
         conn.close()
-        print("\n✨ Monitoramento Finalizado!")
+        print("\n✨ Processo Finalizado!")
         
     except Exception as e:
         print(f"❌ Erro Geral: {e}")
